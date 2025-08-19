@@ -341,3 +341,84 @@
     timestamp: uint
   }
 )
+
+(define-data-var claim-counter uint u0)
+
+;; Contribute to insurance fund
+(define-public (contribute-to-insurance-fund (amount uint))
+  (begin
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    ;; In a real implementation, this would transfer STX from tx-sender to the contract
+    ;; For this example, we're just incrementing the fund balance
+    (var-set insurance-fund-balance (+ (var-get insurance-fund-balance) amount))
+    (ok (var-get insurance-fund-balance))
+  )
+)
+
+(define-public (file-insurance-claim (asset-id uint) (amount uint))
+  (begin
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (let ((claim-id (var-get claim-counter)))
+      (var-set claim-counter (+ claim-id u1))
+      (map-set insurance-claims 
+        { claim-id: claim-id }
+        {
+          claimant: tx-sender,
+          asset-id: asset-id,
+          amount: amount,
+          status: "pending",
+          timestamp: stacks-block-height
+        }
+      )
+      (ok claim-id)
+    )
+  )
+)
+
+;; Review an insurance claim - governance only
+(define-public (review-insurance-claim (claim-id uint) (approve bool))
+  (begin
+    (asserts! (is-eq tx-sender (var-get governance-address)) ERR-NOT-AUTHORIZED)
+    
+    (match (map-get? insurance-claims { claim-id: claim-id })
+      claim-data
+      (begin
+        (if approve
+          (begin
+            ;; Calculate payout amount based on coverage ratio
+            (let 
+              (
+                (payout-amount (/ (* (get amount claim-data) (var-get insurance-coverage-ratio)) u100))
+              )
+              ;; Check if insurance fund has enough balance
+              (asserts! (<= payout-amount (var-get insurance-fund-balance)) ERR-INSUFFICIENT-COLLATERAL)
+              
+              ;; Update insurance fund balance
+              (var-set insurance-fund-balance (- (var-get insurance-fund-balance) payout-amount))
+              
+              ;; In a real implementation, this would transfer the payout to the claimant
+              ;; For this example, we're just updating the claim status
+              
+              ;; Update claim status
+              (map-set insurance-claims
+                { claim-id: claim-id }
+                (merge claim-data { status: "approved" })
+              )
+              
+              (ok payout-amount)
+            )
+          )
+          (begin
+            ;; Reject the claim
+            (map-set insurance-claims
+              { claim-id: claim-id }
+              (merge claim-data { status: "rejected" })
+            )
+            (ok u0)
+          )
+        )
+      )
+      ERR-INSURANCE-CLAIM-REJECTED
+    )
+  )
+)
